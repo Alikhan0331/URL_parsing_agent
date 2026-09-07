@@ -17,6 +17,7 @@ class CrawlState(TypedDict):
     current_page: int
     max_pages: Optional[int]  # None = без лимита: остановка только когда страница пустая
     event_urls: List[str]
+    previous_links: List[str]  # ссылки с предыдущей страницы - для детекции "битой" пагинации
     all_records: Annotated[List[EventRecord], operator.add]
     stop: bool
 

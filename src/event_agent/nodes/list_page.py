@@ -52,5 +52,16 @@ def list_page_node(state: CrawlState) -> dict:
         )
         return {"event_urls": [], "stop": True}
 
+    previous_links = state.get("previous_links") or []
+    if previous_links and set(links) == set(previous_links):
+        log.warning(
+            "Page %d returned the exact same links as the previous page - pagination via "
+            "?page=N (or your URL template) likely doesn't work on this site (common on ASP.NET "
+            "WebForms sites using __doPostBack, or single-page archives). Stopping crawl to avoid "
+            "reprocessing the same content forever.",
+            state["current_page"],
+        )
+        return {"event_urls": [], "stop": True}
+
     log.info("Found %d event links on page %d", len(links), state["current_page"])
-    return {"event_urls": links, "stop": False}
+    return {"event_urls": links, "previous_links": links, "stop": False}

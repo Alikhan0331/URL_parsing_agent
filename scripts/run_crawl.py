@@ -27,7 +27,8 @@ def parse_args():
         type=_parse_max_pages,
         default=settings.max_pages,
         help='Максимум страниц пагинации. 0, отрицательное число или "unlimited" - без лимита '
-             '(обход останавливается сам, когда страница больше не содержит карточек).',
+             '(обход останавливается сам, когда страница больше не содержит карточек или '
+             'повторяет предыдущую страницу).',
     )
     parser.add_argument(
         "--recursion-limit",
@@ -59,6 +60,7 @@ def main():
             "current_page": 1,
             "max_pages": args.max_pages,
             "event_urls": [],
+            "previous_links": [],
             "all_records": [],
             "stop": False,
         },
