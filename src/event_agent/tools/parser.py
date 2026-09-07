@@ -1,5 +1,5 @@
 import logging
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import trafilatura
 from bs4 import BeautifulSoup
@@ -11,6 +11,7 @@ log = logging.getLogger(__name__)
 
 _NAV_TAGS = {"nav", "header", "footer", "aside"}
 _NAV_HINTS = ("menu", "nav", "footer", "header", "sidebar", "breadcrumb", "topbar")
+_HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5")
 
 
 def _is_in_navigation(tag) -> bool:
@@ -23,47 +24,42 @@ def _is_in_navigation(tag) -> bool:
     return False
 
 
-def _list_root_path(base_url: str) -> str:
-    """Возвращает корневой путь страницы списка без query-строки и без {n}-плейсхолдера.
+def _looks_like_card(a) -> bool:
+    """Определяет, похожа ли ссылка на карточку контента (мероприятие/статья/новость).
 
-    Пример: "https://qr-pib.kz/ru/post/?page={n}" -> "/ru/post/"
+    Универсальный признак вместо привязки к конкретному URL-паттерну: карточка почти
+    всегда содержит картинку + заголовок (h1-h5), часто вместе с датой (<time>) и
+    коротким анонсом (<p>). Простые текстовые ссылки в меню/подвале такой структуры
+    не имеют, даже если у них похожий по формату URL (как /ru/p/<id> на некоторых сайтах,
+    где и мероприятия, и служебные страницы используют один и тот же путь).
     """
-    clean = base_url.split("?")[0]
-    parsed = urlparse(clean)
-    return parsed.path
+    has_img = a.find("img") is not None
+    heading = a.find(_HEADING_TAGS)
+    heading_ok = bool(heading and len(heading.get_text(strip=True)) > 5)
+    return has_img and heading_ok
 
 
 def extract_list_links(html: str, base_url: str, list_root_path: str | None = None) -> list[str]:
-    """Находит ссылки на карточки контента (мероприятия/статьи), исключая навигацию и сайт-вайд ссылки.
+    """Находит ссылки на карточки контента по структуре разметки, а не по URL.
 
-    Ключевое условие: ссылка на карточку должна лежать в том же разделе сайта, что и сама
-    страница списка (например, если список на /ru/post/, то карточки — /ru/post/<id>),
-    и не должна находиться внутри <nav>/<header>/<footer>/<aside> или похожих блоков.
-    Это отсекает сайт-вайд ссылки вроде "О госзакупках" (/ru/p/2312) или биографии
-    руководства (/ru/p/2299), которые технически повторяются на каждой странице сайта.
+    list_root_path (опционально) - дополнительный фильтр: если задан, ссылка должна
+    ещё и начинаться с этого пути. Полезно, если на сайте карточки действительно лежат
+    в отдельном разделе. Если не задан - фильтрация идёт только по структуре карточки.
     """
-    if list_root_path is None:
-        list_root_path = _list_root_path(base_url)
-    list_root_path = list_root_path.rstrip("/") + "/"
-
     soup = BeautifulSoup(html, "html.parser")
     candidates = []
 
     for a in soup.find_all("a", href=True):
         if _is_in_navigation(a):
             continue
+        if not _looks_like_card(a):
+            continue
 
         href = urljoin(base_url, a["href"])
-        path = urlparse(href).path
-
-        if not path.startswith(list_root_path):
-            continue
-        if path.rstrip("/") == list_root_path.rstrip("/"):
+        if list_root_path and not href.startswith(urljoin(base_url, list_root_path)):
             continue
 
-        text = a.get_text(strip=True)
-        if a.find("img") or (text and len(text) > 15):
-            candidates.append(href)
+        candidates.append(href)
 
     return list(dict.fromkeys(candidates))
 
