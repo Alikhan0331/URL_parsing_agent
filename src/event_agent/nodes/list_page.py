@@ -15,7 +15,7 @@ def list_page_node(state: CrawlState) -> dict:
         log.warning("Empty response for %s, stopping crawl", url)
         return {"event_urls": [], "stop": True}
 
-    links = extract_list_links(html, url)
+    links = extract_list_links(html, url, list_root_path=state.get("list_root_path"))
     if not links:
         log.info("No event links found on %s, stopping crawl", url)
         return {"event_urls": [], "stop": True}

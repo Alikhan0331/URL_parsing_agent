@@ -1,6 +1,5 @@
 import logging
-from collections import Counter
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import trafilatura
 from bs4 import BeautifulSoup
@@ -10,34 +9,63 @@ from event_agent.tools.fetcher import fetch_html
 
 log = logging.getLogger(__name__)
 
+_NAV_TAGS = {"nav", "header", "footer", "aside"}
+_NAV_HINTS = ("menu", "nav", "footer", "header", "sidebar", "breadcrumb", "topbar")
 
-def extract_list_links(html: str, base_url: str) -> list[str]:
-    """Находит ссылки на карточки мероприятий без знания конкретной вёрстки сайта.
 
-    Эвристика: карточки почти всегда содержат картинку или заметный по длине текст,
-    и почти всегда имеют одинаковый по структуре путь (/ru/post/123, /ru/post/124, ...).
+def _is_in_navigation(tag) -> bool:
+    for parent in tag.parents:
+        if getattr(parent, "name", None) in _NAV_TAGS:
+            return True
+        classes = " ".join(parent.get("class", [])) + " " + str(parent.get("id", ""))
+        if any(hint in classes.lower() for hint in _NAV_HINTS):
+            return True
+    return False
+
+
+def _list_root_path(base_url: str) -> str:
+    """Возвращает корневой путь страницы списка без query-строки и без {n}-плейсхолдера.
+
+    Пример: "https://qr-pib.kz/ru/post/?page={n}" -> "/ru/post/"
     """
+    clean = base_url.split("?")[0]
+    parsed = urlparse(clean)
+    return parsed.path
+
+
+def extract_list_links(html: str, base_url: str, list_root_path: str | None = None) -> list[str]:
+    """Находит ссылки на карточки контента (мероприятия/статьи), исключая навигацию и сайт-вайд ссылки.
+
+    Ключевое условие: ссылка на карточку должна лежать в том же разделе сайта, что и сама
+    страница списка (например, если список на /ru/post/, то карточки — /ru/post/<id>),
+    и не должна находиться внутри <nav>/<header>/<footer>/<aside> или похожих блоков.
+    Это отсекает сайт-вайд ссылки вроде "О госзакупках" (/ru/p/2312) или биографии
+    руководства (/ru/p/2299), которые технически повторяются на каждой странице сайта.
+    """
+    if list_root_path is None:
+        list_root_path = _list_root_path(base_url)
+    list_root_path = list_root_path.rstrip("/") + "/"
+
     soup = BeautifulSoup(html, "html.parser")
     candidates = []
 
     for a in soup.find_all("a", href=True):
+        if _is_in_navigation(a):
+            continue
+
+        href = urljoin(base_url, a["href"])
+        path = urlparse(href).path
+
+        if not path.startswith(list_root_path):
+            continue
+        if path.rstrip("/") == list_root_path.rstrip("/"):
+            continue
+
         text = a.get_text(strip=True)
         if a.find("img") or (text and len(text) > 15):
-            candidates.append(urljoin(base_url, a["href"]))
+            candidates.append(href)
 
-    if not candidates:
-        return []
-
-    patterns = Counter("/".join(c.split("/")[:4]) for c in candidates)
-    main_pattern, _ = patterns.most_common(1)[0]
-
-    seen = set()
-    result = []
-    for c in candidates:
-        if c.startswith(main_pattern) and c not in seen:
-            seen.add(c)
-            result.append(c)
-    return result
+    return list(dict.fromkeys(candidates))
 
 
 def extract_event(url: str) -> EventRecord:

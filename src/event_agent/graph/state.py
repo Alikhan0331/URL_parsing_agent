@@ -13,6 +13,7 @@ class EventRecord(BaseModel):
 
 class CrawlState(TypedDict):
     base_list_url: str  # напр. "https://qr-pib.kz/ru/post/?page={n}"
+    list_root_path: Optional[str]  # напр. "/ru/post/"; если None - вычисляется из base_list_url
     current_page: int
     max_pages: int
     event_urls: List[str]

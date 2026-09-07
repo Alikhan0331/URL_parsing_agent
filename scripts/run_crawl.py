@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 def parse_args():
     parser = argparse.ArgumentParser(description="Crawl a paginated listing site and extract structured records.")
     parser.add_argument("--base-url", required=True, help='URL шаблон, напр. "https://qr-pib.kz/ru/post/?page={n}"')
+    parser.add_argument("--list-root-path", default=None, help='Явный корневой путь раздела, напр. "/ru/post/". Если не указан - вычисляется из --base-url.')
     parser.add_argument("--max-pages", type=int, default=settings.max_pages)
     parser.add_argument("--output", default="output/events.json")
     return parser.parse_args()
@@ -26,6 +27,7 @@ def main():
     result = app.invoke(
         {
             "base_list_url": args.base_url,
+            "list_root_path": args.list_root_path,
             "current_page": 1,
             "max_pages": args.max_pages,
             "event_urls": [],
