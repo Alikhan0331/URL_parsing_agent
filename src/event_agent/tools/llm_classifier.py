@@ -16,12 +16,13 @@ log = logging.getLogger(__name__)
 
 _llm = None
 _TRAILING_ID_RE = re.compile(r"-\d{3,}/?$")
+_BATCH_SIZE = 10  # маленькие модели теряют внимание к отдельным пунктам на больших списках
 
 
 class LinkDecision(BaseModel):
     index: int
     is_content_card: bool
-    reason: str = Field(description="Краткое объяснение (1 фраза), почему ссылка отнесена к этой категории")
+    reason: str = Field(description="Краткое объяснение (1 фраза) ИМЕННО для этой ссылки, не повторяй чужие причины")
 
 
 class ClassifiedLinks(BaseModel):
@@ -31,7 +32,7 @@ class ClassifiedLinks(BaseModel):
 def _get_llm():
     global _llm
     if _llm is None:
-        _llm = ChatOllama(model=settings.ollama_model, base_url=settings.ollama_base_url, temperature=0)
+        _llm = ChatOllama(model=settings.ollama_model, base_url=settings.ollama_base_url, temperature=0.2)
     return _llm
 
 
@@ -44,18 +45,50 @@ def _save_debug_decisions(decisions: List[dict], page_hint: str) -> None:
     log.info("Saved LLM reasoning for this page to %s - open it to see WHY each link was accepted/rejected", path)
 
 
+def _classify_batch(candidates: list[dict]) -> Optional[List[LinkDecision]]:
+    listing = "\n".join(
+        f'{c["index"]}: href="{c["href"]}" image={c["has_image"]} time={c["has_time"]} '
+        f'ends_with_numeric_id={c["has_trailing_id"]} text="{c["text_preview"]}"'
+        for c in candidates
+    )
+
+    prompt = (
+        "Ниже приведён список ссылок со страницы сайта в формате "
+        "'индекс: href=... image=... time=... ends_with_numeric_id=... text=...'.\n"
+        "Для КАЖДОЙ ссылки реши, является ли она карточкой контента в списке "
+        "(отдельная новость, объявление, поздравление, анонс мероприятия или статья - "
+        "то есть отдельный пост из новостной ленты), или служебной/навигационной ссылкой "
+        "(пункт меню сайта, раздел 'о нас'/'структура'/'документы', контакты, ссылка "
+        "на внешний сервис, ссылка на другую страницу пагинации).\n"
+        "Важно: поздравления, объявления и короткие новости - это ВАЛИДНЫЙ контент "
+        "новостной ленты, их нужно принимать наравне с обычными новостями. Не отклоняй "
+        "ссылку только потому, что это поздравление или короткое сообщение.\n"
+        "Важная подсказка: у карточек контента URL часто заканчивается числовым ID или "
+        "содержит осмысленный slug с описанием темы, а у разделов сайта/меню - обычно "
+        "короткий общий путь.\n"
+        "Проанализируй каждую ссылку ИНДИВИДУАЛЬНО - не копируй одно и то же обоснование "
+        "для разных ссылок, у каждой должна быть своя причина, основанная на её содержании.\n"
+        "Верни решение по каждому индексу из списка с кратким индивидуальным обоснованием.\n\n" + listing
+    )
+
+    log.debug("LLM classification batch prompt:\n%s", prompt)
+
+    try:
+        llm = _get_llm().with_structured_output(ClassifiedLinks)
+        result = llm.invoke(prompt)
+        return result.decisions
+    except Exception as e:
+        log.error("LLM link classification failed (is Ollama running at %s?): %s",
+                  settings.ollama_base_url, e)
+        return None
+
+
 def classify_links_with_llm(html: str, base_url: str, max_candidates: int = 60) -> Optional[List[str]]:
     """Fallback для сайтов, где структурная эвристика (img + заголовок) не сработала.
 
-    Модель смотрит на список ссылок страницы (текст, наличие картинки/времени, признак
-    числового ID в конце URL) и решает, какие из них - карточки контента, а какие -
-    служебные/навигационные ссылки. Кандидаты предварительно чистятся тем же фильтром
-    is_in_navigation, что и в структурной эвристике.
-
-    Модель обязана вернуть решение по КАЖДОЙ ссылке с кратким обоснованием (LinkDecision) -
-    это и есть видимое "рассуждение" агента. Полный список решений сохраняется в
-    output/debug/llm_decisions_<page>.json, чтобы можно было посмотреть, почему модель приняла
-    или отвергла конкретную ссылку.
+    Кандидаты обрабатываются небольшими батчами (по _BATCH_SIZE штук за раз), а не одним
+    большим списком - маленькие модели склонны "вырождаться" и копировать одно и то же
+    обоснование на весь список, если кандидатов слишком много за один вызов.
     """
     soup = BeautifulSoup(html, "html.parser")
     anchors = soup.find_all("a", href=True)
@@ -84,61 +117,42 @@ def classify_links_with_llm(html: str, base_url: str, max_candidates: int = 60) 
     if not candidates:
         return []
 
-    listing = "\n".join(
-        f'{c["index"]}: href="{c["href"]}" image={c["has_image"]} time={c["has_time"]} '
-        f'ends_with_numeric_id={c["has_trailing_id"]} text="{c["text_preview"]}"'
-        for c in candidates
-    )
-
-    prompt = (
-        "Ниже приведён список ссылок со страницы сайта в формате "
-        "'индекс: href=... image=... time=... ends_with_numeric_id=... text=...'.\n"
-        "Для КАЖДОЙ ссылки реши, является ли она карточкой контента в списке "
-        "(анонс мероприятия, новости или статьи), или служебной/навигационной ссылкой "
-        "(пункт меню сайта, раздел 'о нас'/'структура'/'документы', контакты, ссылка "
-        "на внешний сервис, ссылка на другую страницу пагинации).\n"
-        "Важная подсказка: у карточек контента URL почти всегда заканчивается числовым ID "
-        "(ends_with_numeric_id=True), а у разделов сайта/меню - нет. Заголовок карточки контента "
-        "обычно описывает конкретное событие или новость (кто, что сделал, когда), а не общее "
-        "название раздела сайта.\n"
-        "Верни решение по каждому индексу из списка с кратким обоснованием.\n\n" + listing
-    )
-
-    log.debug("LLM classification prompt for %s:\n%s", base_url, prompt)
-
-    try:
-        llm = _get_llm().with_structured_output(ClassifiedLinks)
-        result = llm.invoke(prompt)
-    except Exception as e:
-        log.error("LLM link classification failed (is Ollama running at %s?): %s",
-                  settings.ollama_base_url, e)
-        return None
-
     index_to_candidate = {c["index"]: c for c in candidates}
     debug_records = []
     accepted_hrefs = []
+    any_batch_succeeded = False
 
-    for decision in result.decisions:
-        candidate = index_to_candidate.get(decision.index)
-        if candidate is None:
+    for start in range(0, len(candidates), _BATCH_SIZE):
+        batch = candidates[start:start + _BATCH_SIZE]
+        decisions = _classify_batch(batch)
+        if decisions is None:
             continue
-        record = {
-            "href": candidate["href"],
-            "text_preview": candidate["text_preview"],
-            "is_content_card": decision.is_content_card,
-            "reason": decision.reason,
-        }
-        debug_records.append(record)
-        log.info(
-            "LLM decision: %s -> %s (%s) | %s",
-            "ACCEPT" if decision.is_content_card else "reject",
-            candidate["href"],
-            candidate["text_preview"][:60],
-            decision.reason,
-        )
-        if decision.is_content_card:
-            accepted_hrefs.append(candidate["href"])
+        any_batch_succeeded = True
+
+        for decision in decisions:
+            candidate = index_to_candidate.get(decision.index)
+            if candidate is None:
+                continue
+            record = {
+                "href": candidate["href"],
+                "text_preview": candidate["text_preview"],
+                "is_content_card": decision.is_content_card,
+                "reason": decision.reason,
+            }
+            debug_records.append(record)
+            log.info(
+                "LLM decision: %s -> %s (%s) | %s",
+                "ACCEPT" if decision.is_content_card else "reject",
+                candidate["href"],
+                candidate["text_preview"][:60],
+                decision.reason,
+            )
+            if decision.is_content_card:
+                accepted_hrefs.append(candidate["href"])
 
     _save_debug_decisions(debug_records, base_url)
+
+    if not any_batch_succeeded:
+        return None
 
     return list(dict.fromkeys(accepted_hrefs))
