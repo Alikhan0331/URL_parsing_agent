@@ -20,7 +20,8 @@ def _fetch_with_httpx(url: str) -> str | None:
 
 
 def _fetch_with_browser(url: str) -> str | None:
-    """Fallback для сайтов, которые рендерят контент через JavaScript."""
+    """Рендерит страницу headless-браузером - нужно для сайтов, которые подгружают
+    контент через JavaScript/API уже после первоначального ответа сервера."""
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
@@ -33,15 +34,22 @@ def _fetch_with_browser(url: str) -> str | None:
             browser.close()
 
 
-def fetch_html(url: str) -> str | None:
-    """Скачивает HTML: сначала простым HTTP-запросом, при неудаче — headless-браузером."""
-    try:
-        html = _fetch_with_httpx(url)
-        if html and len(html) > 1000:
-            return html
-        log.info("httpx response too small for %s, falling back to browser", url)
-    except Exception as e:
-        log.warning("httpx fetch failed for %s: %s", url, e)
+def fetch_html(url: str, force_browser: bool = False) -> str | None:
+    """Скачивает HTML.
+
+    По умолчанию сначала пробует обычный HTTP-запрос (быстро, дешево), и только если
+    он не сработал (маленький ответ / ошибка) - переключается на headless-браузер.
+    Если force_browser=True, браузер используется сразу - нужно для страниц, где
+    обычный HTTP-запрос возвращает JS-"скелет" без реальных данных (SPA/CSR-сайты).
+    """
+    if not force_browser:
+        try:
+            html = _fetch_with_httpx(url)
+            if html and len(html) > 1000:
+                return html
+            log.info("httpx response too small for %s, falling back to browser", url)
+        except Exception as e:
+            log.warning("httpx fetch failed for %s: %s", url, e)
 
     try:
         return _fetch_with_browser(url)
