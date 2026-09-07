@@ -1,9 +1,11 @@
 import logging
 from pathlib import Path
 
+from event_agent.config import settings
 from event_agent.graph.state import CrawlState
 from event_agent.tools.fetcher import fetch_html
 from event_agent.tools.parser import extract_list_links
+from event_agent.tools.llm_classifier import classify_links_with_llm
 
 log = logging.getLogger(__name__)
 
@@ -33,11 +35,19 @@ def list_page_node(state: CrawlState) -> dict:
         log.warning("Empty response for %s, stopping crawl", url)
         return {"event_urls": [], "stop": True}
 
+    if not links and settings.use_llm_fallback:
+        log.info("Structural heuristic found nothing on %s, asking LLM to classify links", url)
+        llm_links = classify_links_with_llm(html, url)
+        if llm_links:
+            log.info("LLM classified %d links as content cards on page %d", len(llm_links), state["current_page"])
+            links = llm_links
+        elif llm_links is None:
+            log.warning("LLM fallback unavailable - check that Ollama is running and OLLAMA_MODEL is pulled")
+
     if not links:
         log.warning(
-            "No event links found on %s even after browser fallback. "
-            "Check output/debug/list_page_%d.html to inspect the actual markup, "
-            "or pass an explicit --list-root-path.",
+            "No event links found on %s (structural heuristic and LLM fallback both empty). "
+            "Check output/debug/list_page_%d.html to inspect the actual markup.",
             url, state["current_page"],
         )
         return {"event_urls": [], "stop": True}

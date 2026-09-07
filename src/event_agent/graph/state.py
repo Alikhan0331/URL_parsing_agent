@@ -13,9 +13,9 @@ class EventRecord(BaseModel):
 
 class CrawlState(TypedDict):
     base_list_url: str  # напр. "https://qr-pib.kz/ru/post/?page={n}"
-    list_root_path: Optional[str]  # напр. "/ru/post/"; если None - вычисляется из base_list_url
+    list_root_path: Optional[str]  # опциональный доп. фильтр по разделу сайта
     current_page: int
-    max_pages: int
+    max_pages: Optional[int]  # None = без лимита: остановка только когда страница пустая
     event_urls: List[str]
     all_records: Annotated[List[EventRecord], operator.add]
     stop: bool
