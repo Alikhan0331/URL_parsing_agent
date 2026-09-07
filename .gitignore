@@ -1,1 +1,9 @@
-FULL_GITIGNORE_CONTENT
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+output/
+*.egg-info/
+.pytest_cache/
+.DS_Store

@@ -1,1 +1,7 @@
-FULL_LANGGRAPH_JSON_CONTENT
+{
+  "dependencies": ["."],
+  "graphs": {
+    "event_agent": "./src/event_agent/graph/builder.py:build_graph"
+  },
+  "env": ".env"
+}
