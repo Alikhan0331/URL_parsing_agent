@@ -6,22 +6,11 @@ from bs4 import BeautifulSoup
 
 from event_agent.graph.state import EventRecord
 from event_agent.tools.fetcher import fetch_html
+from event_agent.tools.dom_utils import is_in_navigation
 
 log = logging.getLogger(__name__)
 
-_NAV_TAGS = {"nav", "header", "footer", "aside"}
-_NAV_HINTS = ("menu", "nav", "footer", "header", "sidebar", "breadcrumb", "topbar")
 _HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5")
-
-
-def _is_in_navigation(tag) -> bool:
-    for parent in tag.parents:
-        if getattr(parent, "name", None) in _NAV_TAGS:
-            return True
-        classes = " ".join(parent.get("class", [])) + " " + str(parent.get("id", ""))
-        if any(hint in classes.lower() for hint in _NAV_HINTS):
-            return True
-    return False
 
 
 def _looks_like_card(a) -> bool:
@@ -50,7 +39,7 @@ def extract_list_links(html: str, base_url: str, list_root_path: str | None = No
     candidates = []
 
     for a in soup.find_all("a", href=True):
-        if _is_in_navigation(a):
+        if is_in_navigation(a):
             continue
         if not _looks_like_card(a):
             continue
