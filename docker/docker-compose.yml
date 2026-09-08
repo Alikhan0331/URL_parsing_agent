@@ -1,5 +1,5 @@
 services:
-  event-agent:
+  event-agent-scheduler:
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -7,4 +7,5 @@ services:
       - ../.env
     volumes:
       - ../output:/app/output
-    command: ["--base-url", "https://qr-pib.kz/ru/post/?page={n}", "--max-pages", "3"]
+      - ../config:/app/config
+    restart: unless-stopped
