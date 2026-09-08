@@ -16,7 +16,26 @@ log = logging.getLogger(__name__)
 
 _llm = None
 _TRAILING_ID_RE = re.compile(r"-\d{3,}/?$")
-_BATCH_SIZE = 10  # маленькие модели теряют внимание к отдельным пунктам на больших списках
+_BATCH_SIZE = 10
+
+_FEW_SHOT_EXAMPLES = """
+Примеры правильной классификации (ориентируйся на них):
+
+0: href="https://www.akorda.kz/ru/glava-gosudarstva-prinyal-ministra-ekologii-483750" image=False time=False ends_with_numeric_id=True text="Глава государства принял министра экологии и природных ресурсов Алибека Куантырова"
+-> is_content_card=true, reason="Конкретное событие (кто, что сделал), URL заканчивается числовым ID"
+
+1: href="https://www.akorda.kz/ru/legal_acts" image=False time=False ends_with_numeric_id=False text="Правовые акты"
+-> is_content_card=false, reason="Общее название раздела сайта, нет числового ID, нет описания конкретного события"
+
+2: href="https://www.ektu.kz/newsevents/dombra_kuni.aspx" image=False time=False ends_with_numeric_id=False text="Домбыра күні құтты болсын!"
+-> is_content_card=true, reason="Поздравление - это отдельный пост из новостной ленты университета, валидный контент, даже без числового ID"
+
+3: href="https://eotinish.kz/sendAppeal?orgId=77" image=False time=False ends_with_numeric_id=False text="Подать обращение"
+-> is_content_card=false, reason="Ссылка на внешний сервис подачи обращений, а не на новость/статью"
+
+4: href="https://www.akorda.kz/ru/executive_office/schedule" image=False time=False ends_with_numeric_id=False text="График приёма граждан"
+-> is_content_card=false, reason="Служебная страница раздела сайта, не конкретная новость"
+"""
 
 
 class LinkDecision(BaseModel):
@@ -66,9 +85,11 @@ def _classify_batch(candidates: list[dict]) -> Optional[List[LinkDecision]]:
         "Важная подсказка: у карточек контента URL часто заканчивается числовым ID или "
         "содержит осмысленный slug с описанием темы, а у разделов сайта/меню - обычно "
         "короткий общий путь.\n"
-        "Проанализируй каждую ссылку ИНДИВИДУАЛЬНО - не копируй одно и то же обоснование "
+        + _FEW_SHOT_EXAMPLES +
+        "\nПроанализируй каждую ссылку ИНДИВИДУАЛЬНО - не копируй одно и то же обоснование "
         "для разных ссылок, у каждой должна быть своя причина, основанная на её содержании.\n"
-        "Верни решение по каждому индексу из списка с кратким индивидуальным обоснованием.\n\n" + listing
+        "Верни решение по каждому индексу из списка НИЖЕ (не по примерам выше) с кратким "
+        "индивидуальным обоснованием.\n\n" + listing
     )
 
     log.debug("LLM classification batch prompt:\n%s", prompt)
@@ -86,9 +107,9 @@ def _classify_batch(candidates: list[dict]) -> Optional[List[LinkDecision]]:
 def classify_links_with_llm(html: str, base_url: str, max_candidates: int = 60) -> Optional[List[str]]:
     """Fallback для сайтов, где структурная эвристика (img + заголовок) не сработала.
 
-    Кандидаты обрабатываются небольшими батчами (по _BATCH_SIZE штук за раз), а не одним
-    большим списком - маленькие модели склонны "вырождаться" и копировать одно и то же
-    обоснование на весь список, если кандидатов слишком много за один вызов.
+    Использует few-shot примеры (реальные решения с akorda.kz и ektu.kz) вместо
+    fine-tuning модели - дешёвый и быстро редактируемый способ дать модели "контекст"
+    о том, как выглядят правильные решения, без изменения весов модели.
     """
     soup = BeautifulSoup(html, "html.parser")
     anchors = soup.find_all("a", href=True)
