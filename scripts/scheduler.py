@@ -5,6 +5,7 @@
 а не системный cron, чтобы не усложнять Docker-образ отдельным cron-демоном.
 """
 import logging
+from datetime import datetime
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -22,16 +23,20 @@ def main() -> None:
     hour, minute = config.schedule_time.split(":")
 
     scheduler = BlockingScheduler(timezone=config.timezone)
-    job = scheduler.add_job(
+    trigger = CronTrigger(hour=int(hour), minute=int(minute), timezone=config.timezone)
+
+    next_run = trigger.get_next_fire_time(None, datetime.now(trigger.timezone))
+
+    scheduler.add_job(
         run_daily,
-        trigger=CronTrigger(hour=int(hour), minute=int(minute)),
+        trigger=trigger,
         id="daily_scan",
         misfire_grace_time=3600,
     )
 
     log.info(
-        "Scheduler started - daily scan scheduled at %s (%s). Next run: %s",
-        config.schedule_time, config.timezone, job.next_run_time,
+        "Scheduler configured - daily scan at %s (%s). Next scheduled run: %s",
+        config.schedule_time, config.timezone, next_run,
     )
     log.info("Running one scan now on startup too (so you don't have to wait for the schedule).")
     run_daily()
