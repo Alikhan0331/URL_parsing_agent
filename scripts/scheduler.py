@@ -22,7 +22,7 @@ def main() -> None:
     hour, minute = config.schedule_time.split(":")
 
     scheduler = BlockingScheduler(timezone=config.timezone)
-    scheduler.add_job(
+    job = scheduler.add_job(
         run_daily,
         trigger=CronTrigger(hour=int(hour), minute=int(minute)),
         id="daily_scan",
@@ -30,9 +30,10 @@ def main() -> None:
     )
 
     log.info(
-        "Scheduler started - daily scan will run at %s (%s). Running one scan now on startup too.",
-        config.schedule_time, config.timezone,
+        "Scheduler started - daily scan scheduled at %s (%s). Next run: %s",
+        config.schedule_time, config.timezone, job.next_run_time,
     )
+    log.info("Running one scan now on startup too (so you don't have to wait for the schedule).")
     run_daily()
     scheduler.start()
 

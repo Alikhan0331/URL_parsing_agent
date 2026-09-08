@@ -5,8 +5,9 @@
 встречает URL, который уже есть в базе - потому что списки новостей обычно отсортированы
 от новых к старым, и если текущий URL уже видели, то дальше пойдут ещё более старые статьи.
 
-Сохраняются в базу ТОЛЬКО статьи, в которых встречается хотя бы одно из keywords сайта -
-остальные разбираются (чтобы проверить текст), но не сохраняются.
+Если у сайта keywords пуст ([]) - фильтр по ключевым словам отключён, сохраняются ВСЕ
+валидные статьи. Если keywords заданы - сохраняются только статьи, где встречается
+хотя бы одно из них.
 """
 import logging
 import sqlite3
@@ -20,8 +21,13 @@ from event_agent.config import settings
 
 log = logging.getLogger(__name__)
 
+_NO_FILTER_MARKER = "*"
+
 
 def _find_matched_keywords(record, keywords: list[str]) -> list[str]:
+    if not keywords:
+        return [_NO_FILTER_MARKER]
+
     haystack = f"{record.title or ''} {record.body_text or ''}".lower()
     return [kw for kw in keywords if kw.lower() in haystack]
 
@@ -29,6 +35,8 @@ def _find_matched_keywords(record, keywords: list[str]) -> list[str]:
 def scan_site_once(site: SiteConfig, conn: sqlite3.Connection) -> int:
     """Возвращает количество НОВЫХ сохранённых статей за этот запуск."""
     saved_count = 0
+    filter_note = "БЕЗ ФИЛЬТРА (keywords пуст - сохраняем всё)" if not site.keywords else f"фильтр: {site.keywords}"
+    log.info("=== [%s] Начинаю обход (%s) ===", site.name, filter_note)
 
     for page_num in range(1, site.max_pages_per_run + 1):
         url = site.base_list_url.format(n=page_num)
@@ -67,7 +75,10 @@ def scan_site_once(site: SiteConfig, conn: sqlite3.Connection) -> int:
             if matched:
                 save_article(conn, site.name, record, matched)
                 saved_count += 1
-                log.info("[%s] SAVED (matched %s): %s", site.name, matched, link)
+                if matched == [_NO_FILTER_MARKER]:
+                    log.info("[%s] SAVED (no filter): %s", site.name, link)
+                else:
+                    log.info("[%s] SAVED (matched %s): %s", site.name, matched, link)
             else:
                 log.info("[%s] Not saved (no keyword match): %s", site.name, link)
 
@@ -75,4 +86,5 @@ def scan_site_once(site: SiteConfig, conn: sqlite3.Connection) -> int:
             log.info("[%s] Reached previously-seen content mid-page, stopping", site.name)
             break
 
+    log.info("=== [%s] Обход завершён: сохранено %d новых статей ===", site.name, saved_count)
     return saved_count
