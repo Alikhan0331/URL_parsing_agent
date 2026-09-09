@@ -5,7 +5,7 @@
     {
       "name": "qr-pib",
       "base_list_url": "https://qr-pib.kz/ru/post/?page={n}",
-      "": null,
+      "list_root_path": null,
       "keywords": [],
       "max_pages_per_run": 2
     },
