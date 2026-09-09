@@ -177,3 +177,79 @@ def classify_links_with_llm(html: str, base_url: str, max_candidates: int = 60) 
         return None
 
     return list(dict.fromkeys(accepted_hrefs))
+
+
+def verify_candidates_with_llm(html: str, base_url: str, candidate_hrefs: list[str]) -> Optional[List[str]]:
+    """Проверяет ссылки, которые УЖЕ нашёл структурный фильтр (img + заголовок).
+
+    В отличие от classify_links_with_llm (который ищет карточки среди ВСЕХ ссылок
+    страницы, когда структурная эвристика ничего не нашла), эта функция работает как
+    "второе мнение" НАД уже отобранными структурным фильтром ссылками: он мог ошибочно
+    принять блок с такой же DOM-структурой (img+заголовок), но другого смысла -
+    карточку партнёра, вакансию, товар и т.п. LLM подтверждает или отклоняет каждую
+    такую ссылку по смыслу текста, а не по разметке.
+
+    Возвращает None, если LLM недоступна - в этом случае вызывающий код должен сохранить
+    исходные структурные кандидаты как есть, а не терять их из-за временного сбоя LLM.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    anchors = soup.find_all("a", href=True)
+    href_set = set(candidate_hrefs)
+
+    candidates = []
+    for i, a in enumerate(anchors):
+        href = urljoin(base_url, a["href"])
+        if href not in href_set:
+            continue
+        text = a.get_text(" ", strip=True)
+        candidates.append({
+            "index": i,
+            "href": href,
+            "has_image": a.find("img") is not None,
+            "has_time": a.find("time") is not None,
+            "has_trailing_id": bool(_TRAILING_ID_RE.search(href)),
+            "text_preview": text[:150] if text else "",
+        })
+
+    if not candidates:
+        return list(candidate_hrefs)
+
+    index_to_candidate = {c["index"]: c for c in candidates}
+    debug_records = []
+    accepted_hrefs = []
+    any_batch_succeeded = False
+
+    for start in range(0, len(candidates), _BATCH_SIZE):
+        batch = candidates[start:start + _BATCH_SIZE]
+        decisions = _classify_batch(batch)
+        if decisions is None:
+            continue
+        any_batch_succeeded = True
+
+        for decision in decisions:
+            candidate = index_to_candidate.get(decision.index)
+            if candidate is None:
+                continue
+            record = {
+                "href": candidate["href"],
+                "text_preview": candidate["text_preview"],
+                "is_content_card": decision.is_content_card,
+                "reason": decision.reason,
+            }
+            debug_records.append(record)
+            log.info(
+                "LLM verification (structural match): %s -> %s (%s) | %s",
+                "CONFIRM" if decision.is_content_card else "REJECT",
+                candidate["href"],
+                candidate["text_preview"][:60],
+                decision.reason,
+            )
+            if decision.is_content_card:
+                accepted_hrefs.append(candidate["href"])
+
+    _save_debug_decisions(debug_records, base_url + "_verify")
+
+    if not any_batch_succeeded:
+        return None
+
+    return list(dict.fromkeys(accepted_hrefs))

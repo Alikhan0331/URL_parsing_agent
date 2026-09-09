@@ -10,6 +10,7 @@ class Settings:
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     ollama_model: str = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
     use_llm_fallback: bool = os.getenv("USE_LLM_FALLBACK", "true").lower() in ("1", "true", "yes")
+    llm_verify_structural: bool = os.getenv("LLM_VERIFY_STRUCTURAL", "true").lower() in ("1", "true", "yes")
 
     max_pages: int = int(os.getenv("MAX_PAGES", "5"))
     request_timeout: int = int(os.getenv("REQUEST_TIMEOUT", "15"))

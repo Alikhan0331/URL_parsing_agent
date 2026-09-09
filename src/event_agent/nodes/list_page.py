@@ -5,7 +5,7 @@ from event_agent.config import settings
 from event_agent.graph.state import CrawlState
 from event_agent.tools.fetcher import fetch_html
 from event_agent.tools.parser import extract_list_links
-from event_agent.tools.llm_classifier import classify_links_with_llm
+from event_agent.tools.llm_classifier import classify_links_with_llm, verify_candidates_with_llm
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +34,24 @@ def list_page_node(state: CrawlState) -> dict:
     if not html:
         log.warning("Empty response for %s, stopping crawl", url)
         return {"event_urls": [], "stop": True}
+
+    if links and settings.llm_verify_structural:
+        log.info("Verifying %d structurally-matched link(s) on page %d with LLM", len(links), state["current_page"])
+        verified = verify_candidates_with_llm(html, url, links)
+        if verified is not None:
+            rejected = set(links) - set(verified)
+            if rejected:
+                log.info(
+                    "LLM verification rejected %d structurally-matched link(s) on page %d "
+                    "(same DOM shape - img+heading - but different meaning): %s",
+                    len(rejected), state["current_page"], sorted(rejected),
+                )
+            links = verified
+        else:
+            log.warning(
+                "LLM verification unavailable (Ollama unreachable?) - keeping structurally-matched "
+                "links unverified for this page"
+            )
 
     if not links and settings.use_llm_fallback:
         log.info("Structural heuristic found nothing on %s, asking LLM to classify links", url)
