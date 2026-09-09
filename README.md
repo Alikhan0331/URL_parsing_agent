@@ -46,7 +46,7 @@ docker/
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 playwright install chromium
-cp .env.example .env
+cp .env .env
 
 python scripts/run_crawl.py --base-url "https://qr-pib.kz/ru/post/?page={n}" --max-pages 3
 ```

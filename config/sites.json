@@ -1,20 +1,20 @@
 {
-  "schedule_time": "03:00",
+  "schedule_time": "14:55",
   "timezone": "Asia/Almaty",
   "sites": [
     {
       "name": "qr-pib",
       "base_list_url": "https://qr-pib.kz/ru/post/?page={n}",
-      "list_root_path": null,
-      "keywords": ["ПЦ"],
-      "max_pages_per_run": 5
+      "": null,
+      "keywords": [],
+      "max_pages_per_run": 2
     },
     {
       "name": "akorda",
       "base_list_url": "https://www.akorda.kz/ru/events?page={n}",
       "list_root_path": null,
-      "keywords": ["ПЦ"],
-      "max_pages_per_run": 5
+      "keywords": [],
+      "max_pages_per_run": 2
     }
   ]
 }
