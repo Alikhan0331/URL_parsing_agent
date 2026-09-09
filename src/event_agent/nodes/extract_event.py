@@ -8,4 +8,4 @@ log = logging.getLogger(__name__)
 def extract_event_node(payload: EventTask) -> dict:
     log.info("Extracting event: %s", payload["url"])
     record = extract_event(payload["url"])
-    return {"all_records": [record]}
+    return {"current_record": record}

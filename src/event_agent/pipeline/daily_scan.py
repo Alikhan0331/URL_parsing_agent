@@ -1,18 +1,11 @@
 """Инкрементальный автономный обход одного сайта.
 
-В отличие от scripts/run_crawl.py (разовый ручной прогон с --max-pages), этот модуль
-предназначен для регулярного (крон/scheduler) запуска: он останавливается, как только
-встречает URL, который уже есть в базе - потому что списки новостей обычно отсортированы
-от новых к старым, и если текущий URL уже видели, то дальше пойдут ещё более старые статьи.
+ФИЛЬТРАЦИЯ ПО ТЕМЕ: статья сохраняется, ТОЛЬКО если она ДЕЙСТВИТЕЛЬНО посвящена
+Президентскому центру (ПЦ). Ключевые слова больше НЕ используются - вместо них
+каждая статья отправляется LLM (classify_topic_pc).
 
-Если у сайта keywords пуст ([]) - фильтр по ключевым словам отключён, сохраняются ВСЕ
-валидные статьи. Если keywords заданы - сохраняются только статьи, где встречается
-хотя бы одно из них.
-
-Структурный фильтр (img+заголовок) может ошибочно принять блок с такой же вёрсткой, но
-другим смыслом (карточка партнёра, вакансия и т.п.) - поэтому, как и в ручном краулере,
-каждый такой кандидат обязательно проверяется LLM (verify_candidates_with_llm) перед
-извлечением и сохранением, если включён флаг LLM_VERIFY_STRUCTURAL.
+Структурный фильтр кандидатов обязательно проверяется LLM (verify_candidates_with_llm)
+перед извлечением, если включён флаг LLM_VERIFY_STRUCTURAL.
 """
 import logging
 import sqlite3
@@ -21,27 +14,16 @@ from event_agent.config_sites import SiteConfig
 from event_agent.storage.db import url_seen, save_article
 from event_agent.tools.fetcher import fetch_html
 from event_agent.tools.parser import extract_list_links, extract_event
-from event_agent.tools.llm_classifier import classify_links_with_llm, verify_candidates_with_llm
+from event_agent.tools.llm_classifier import classify_links_with_llm, verify_candidates_with_llm, classify_topic_pc
 from event_agent.config import settings
 
 log = logging.getLogger(__name__)
-
-_NO_FILTER_MARKER = "*"
-
-
-def _find_matched_keywords(record, keywords: list[str]) -> list[str]:
-    if not keywords:
-        return [_NO_FILTER_MARKER]
-
-    haystack = f"{record.title or ''} {record.body_text or ''}".lower()
-    return [kw for kw in keywords if kw.lower() in haystack]
 
 
 def scan_site_once(site: SiteConfig, conn: sqlite3.Connection) -> int:
     """Возвращает количество НОВЫХ сохранённых статей за этот запуск."""
     saved_count = 0
-    filter_note = "БЕЗ ФИЛЬТРА (keywords пуст - сохраняем всё)" if not site.keywords else f"фильтр: {site.keywords}"
-    log.info("=== [%s] Начинаю обход (%s) ===", site.name, filter_note)
+    log.info("=== [%s] Начинаю обход (обязательная проверка на тему ПЦ) ===", site.name)
 
     for page_num in range(1, site.max_pages_per_run + 1):
         url = site.base_list_url.format(n=page_num)
@@ -62,8 +44,7 @@ def scan_site_once(site: SiteConfig, conn: sqlite3.Connection) -> int:
                 rejected = set(links) - set(verified)
                 if rejected:
                     log.info(
-                        "[%s] LLM verification rejected %d structurally-matched link(s) on page %d "
-                        "(same DOM shape - img+heading - but different meaning): %s",
+                        "[%s] LLM verification rejected %d structurally-matched link(s) on page %d: %s",
                         site.name, len(rejected), page_num, sorted(rejected),
                     )
                 links = verified
@@ -95,16 +76,21 @@ def scan_site_once(site: SiteConfig, conn: sqlite3.Connection) -> int:
                 log.warning("[%s] Skipping invalid extraction: %s", site.name, link)
                 continue
 
-            matched = _find_matched_keywords(record, site.keywords)
-            if matched:
-                save_article(conn, site.name, record, matched)
-                saved_count += 1
-                if matched == [_NO_FILTER_MARKER]:
-                    log.info("[%s] SAVED (no filter): %s", site.name, link)
-                else:
-                    log.info("[%s] SAVED (matched %s): %s", site.name, matched, link)
-            else:
-                log.info("[%s] Not saved (no keyword match): %s", site.name, link)
+            topic_decision = classify_topic_pc(record.title, record.body_text)
+            if topic_decision is None:
+                log.warning(
+                    "[%s] PC topic check unavailable (LLM down) - skipping to be safe: %s",
+                    site.name, link,
+                )
+                continue
+
+            if not topic_decision.is_about_pc:
+                log.info("[%s] Not saved (not about \u041f\u0426 - %s): %s", site.name, topic_decision.reason, link)
+                continue
+
+            save_article(conn, site.name, record, [topic_decision.reason])
+            saved_count += 1
+            log.info("[%s] SAVED (about \u041f\u0426 - %s): %s", site.name, topic_decision.reason, link)
 
         if len(new_links) < len(links):
             log.info("[%s] Reached previously-seen content mid-page, stopping", site.name)

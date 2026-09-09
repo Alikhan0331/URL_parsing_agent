@@ -22,30 +22,49 @@ _FEW_SHOT_EXAMPLES = """
 Примеры правильной классификации (ориентируйся на них):
 
 0: href="https://www.akorda.kz/ru/glava-gosudarstva-prinyal-ministra-ekologii-483750" image=False time=False ends_with_numeric_id=True text="Глава государства принял министра экологии и природных ресурсов Алибека Куантырова"
--> is_content_card=true, reason="Конкретное событие (кто, что сделал), URL заканчивается числовым ID"
+-> is_content_card=true, reason="Конкретное событие, URL заканчивается числовым ID"
 
 1: href="https://www.akorda.kz/ru/legal_acts" image=False time=False ends_with_numeric_id=False text="Правовые акты"
--> is_content_card=false, reason="Общее название раздела сайта, нет числового ID, нет описания конкретного события"
+-> is_content_card=false, reason="Общее название раздела сайта, нет числового ID"
 
 2: href="https://www.ektu.kz/newsevents/dombra_kuni.aspx" image=False time=False ends_with_numeric_id=False text="Домбыра күні құтты болсын!"
--> is_content_card=true, reason="Поздравление - это отдельный пост из новостной ленты университета, валидный контент, даже без числового ID"
+-> is_content_card=true, reason="Поздравление - валидный контент, даже без числового ID"
 
 3: href="https://eotinish.kz/sendAppeal?orgId=77" image=False time=False ends_with_numeric_id=False text="Подать обращение"
--> is_content_card=false, reason="Ссылка на внешний сервис подачи обращений, а не на новость/статью"
+-> is_content_card=false, reason="Ссылка на внешний сервис, а не на новость/статью"
 
 4: href="https://www.akorda.kz/ru/executive_office/schedule" image=False time=False ends_with_numeric_id=False text="График приёма граждан"
 -> is_content_card=false, reason="Служебная страница раздела сайта, не конкретная новость"
+"""
+
+_PC_CONTEXT = """
+Президентский центр Республики Казахстан (ПЦ) - многофункциональный музейно-архивно-библиотечный
+комплекс в Астане (ул. Алихана Бокейхана, 1а), созданный в 2023 году на базе Библиотеки
+Первого Президента РК, в ведении Управления делами Президента (УДП). ПЦ занимается
+сохранением, изучением и продвижением исторического наследия Президента и экс-президентов
+Казахстана: хранит их личные библиотеки, архивы и музейные собрания, проводит выставки,
+конференции, лекции и культурно-просветительские мероприятия, посвящённые истории
+независимого Казахстана и институту президентства.
+
+ВАЖНО: словосочетание "Президентский центр" в тексте НЕ значит, что статья про ПЦ.
+Например, если ПЦ упомянут только как адрес/место проведения чужого мероприятия, или в
+общем перечне учреждений УДП, - это НЕ статья про ПЦ.
 """
 
 
 class LinkDecision(BaseModel):
     index: int
     is_content_card: bool
-    reason: str = Field(description="Краткое объяснение (1 фраза) ИМЕННО для этой ссылки, не повторяй чужие причины")
+    reason: str = Field(description="Краткое объяснение ИМЕННО для этой ссылки")
 
 
 class ClassifiedLinks(BaseModel):
     decisions: List[LinkDecision]
+
+
+class TopicDecision(BaseModel):
+    is_about_pc: bool
+    reason: str = Field(description="Краткое объяснение, почему статья именно про ПЦ или нет")
 
 
 def _get_llm():
@@ -61,7 +80,7 @@ def _save_debug_decisions(decisions: List[dict], page_hint: str) -> None:
     safe_hint = "".join(c if c.isalnum() else "_" for c in page_hint)[:80]
     path = debug_dir / f"llm_decisions_{safe_hint}.json"
     path.write_text(json.dumps(decisions, ensure_ascii=False, indent=2), encoding="utf-8")
-    log.info("Saved LLM reasoning for this page to %s - open it to see WHY each link was accepted/rejected", path)
+    log.info("Saved LLM reasoning for this page to %s", path)
 
 
 def _classify_batch(candidates: list[dict]) -> Optional[List[LinkDecision]]:
@@ -75,42 +94,25 @@ def _classify_batch(candidates: list[dict]) -> Optional[List[LinkDecision]]:
         "Ниже приведён список ссылок со страницы сайта в формате "
         "'индекс: href=... image=... time=... ends_with_numeric_id=... text=...'.\n"
         "Для КАЖДОЙ ссылки реши, является ли она карточкой контента в списке "
-        "(отдельная новость, объявление, поздравление, анонс мероприятия или статья - "
-        "то есть отдельный пост из новостной ленты), или служебной/навигационной ссылкой "
-        "(пункт меню сайта, раздел 'о нас'/'структура'/'документы', контакты, ссылка "
-        "на внешний сервис, ссылка на другую страницу пагинации).\n"
-        "Важно: поздравления, объявления и короткие новости - это ВАЛИДНЫЙ контент "
-        "новостной ленты, их нужно принимать наравне с обычными новостями. Не отклоняй "
-        "ссылку только потому, что это поздравление или короткое сообщение.\n"
-        "Важная подсказка: у карточек контента URL часто заканчивается числовым ID или "
-        "содержит осмысленный slug с описанием темы, а у разделов сайта/меню - обычно "
-        "короткий общий путь.\n"
+        "(отдельная новость, объявление, поздравление, анонс мероприятия или статья), или служебной/навигационной ссылкой.\n"
+        "Важно: поздравления, объявления и короткие новости - валидный контент.\n"
+        "У карточек контента URL часто заканчивается числовым ID.\n"
         + _FEW_SHOT_EXAMPLES +
-        "\nПроанализируй каждую ссылку ИНДИВИДУАЛЬНО - не копируй одно и то же обоснование "
-        "для разных ссылок, у каждой должна быть своя причина, основанная на её содержании.\n"
-        "Верни решение по каждому индексу из списка НИЖЕ (не по примерам выше) с кратким "
-        "индивидуальным обоснованием.\n\n" + listing
+        "\nПроанализируй каждую ссылку ИНДИВИДУАЛЬНО.\n"
+        "Верни решение по каждому индексу из списка НИЖЕ.\n\n" + listing
     )
-
-    log.debug("LLM classification batch prompt:\n%s", prompt)
 
     try:
         llm = _get_llm().with_structured_output(ClassifiedLinks)
         result = llm.invoke(prompt)
         return result.decisions
     except Exception as e:
-        log.error("LLM link classification failed (is Ollama running at %s?): %s",
-                  settings.ollama_base_url, e)
+        log.error("LLM link classification failed: %s", e)
         return None
 
 
 def classify_links_with_llm(html: str, base_url: str, max_candidates: int = 60) -> Optional[List[str]]:
-    """Fallback для сайтов, где структурная эвристика (img + заголовок) не сработала.
-
-    Использует few-shot примеры (реальные решения с akorda.kz и ektu.kz) вместо
-    fine-tuning модели - дешёвый и быстро редактируемый способ дать модели "контекст"
-    о том, как выглядят правильные решения, без изменения весов модели.
-    """
+    """Fallback для сайтов, где структурная эвристика не сработала."""
     soup = BeautifulSoup(html, "html.parser")
     anchors = soup.find_all("a", href=True)
 
@@ -118,11 +120,9 @@ def classify_links_with_llm(html: str, base_url: str, max_candidates: int = 60) 
     for i, a in enumerate(anchors):
         if is_in_navigation(a):
             continue
-
         text = a.get_text(" ", strip=True)
         if not text or len(text) < 10:
             continue
-
         href = urljoin(base_url, a["href"])
         candidates.append({
             "index": i,
@@ -149,7 +149,6 @@ def classify_links_with_llm(html: str, base_url: str, max_candidates: int = 60) 
         if decisions is None:
             continue
         any_batch_succeeded = True
-
         for decision in decisions:
             candidate = index_to_candidate.get(decision.index)
             if candidate is None:
@@ -161,13 +160,8 @@ def classify_links_with_llm(html: str, base_url: str, max_candidates: int = 60) 
                 "reason": decision.reason,
             }
             debug_records.append(record)
-            log.info(
-                "LLM decision: %s -> %s (%s) | %s",
-                "ACCEPT" if decision.is_content_card else "reject",
-                candidate["href"],
-                candidate["text_preview"][:60],
-                decision.reason,
-            )
+            log.info("LLM decision: %s -> %s | %s",
+                      "ACCEPT" if decision.is_content_card else "reject", candidate["href"], decision.reason)
             if decision.is_content_card:
                 accepted_hrefs.append(candidate["href"])
 
@@ -180,18 +174,7 @@ def classify_links_with_llm(html: str, base_url: str, max_candidates: int = 60) 
 
 
 def verify_candidates_with_llm(html: str, base_url: str, candidate_hrefs: list[str]) -> Optional[List[str]]:
-    """Проверяет ссылки, которые УЖЕ нашёл структурный фильтр (img + заголовок).
-
-    В отличие от classify_links_with_llm (который ищет карточки среди ВСЕХ ссылок
-    страницы, когда структурная эвристика ничего не нашла), эта функция работает как
-    "второе мнение" НАД уже отобранными структурным фильтром ссылками: он мог ошибочно
-    принять блок с такой же DOM-структурой (img+заголовок), но другого смысла -
-    карточку партнёра, вакансию, товар и т.п. LLM подтверждает или отклоняет каждую
-    такую ссылку по смыслу текста, а не по разметке.
-
-    Возвращает None, если LLM недоступна - в этом случае вызывающий код должен сохранить
-    исходные структурные кандидаты как есть, а не терять их из-за временного сбоя LLM.
-    """
+    """Проверяет ссылки, которые УЖЕ нашёл структурный фильтр."""
     soup = BeautifulSoup(html, "html.parser")
     anchors = soup.find_all("a", href=True)
     href_set = set(candidate_hrefs)
@@ -225,7 +208,6 @@ def verify_candidates_with_llm(html: str, base_url: str, candidate_hrefs: list[s
         if decisions is None:
             continue
         any_batch_succeeded = True
-
         for decision in decisions:
             candidate = index_to_candidate.get(decision.index)
             if candidate is None:
@@ -237,13 +219,8 @@ def verify_candidates_with_llm(html: str, base_url: str, candidate_hrefs: list[s
                 "reason": decision.reason,
             }
             debug_records.append(record)
-            log.info(
-                "LLM verification (structural match): %s -> %s (%s) | %s",
-                "CONFIRM" if decision.is_content_card else "REJECT",
-                candidate["href"],
-                candidate["text_preview"][:60],
-                decision.reason,
-            )
+            log.info("LLM verification: %s -> %s | %s",
+                      "CONFIRM" if decision.is_content_card else "REJECT", candidate["href"], decision.reason)
             if decision.is_content_card:
                 accepted_hrefs.append(candidate["href"])
 
@@ -253,3 +230,34 @@ def verify_candidates_with_llm(html: str, base_url: str, candidate_hrefs: list[s
         return None
 
     return list(dict.fromkeys(accepted_hrefs))
+
+
+def classify_topic_pc(title: str | None, body_text: str | None) -> Optional[TopicDecision]:
+    """Определяет, является ли статья ДЕЙСТВИТЕЛЬНО про Президентский центр (ПЦ).
+
+    В отличие от поиска ключевого слова, эта функция отправляет полный текст статьи LLM
+    и просит оценить, является ли ПЦ главной темой материала, а не просто упомянут мимоходом.
+
+    Возвращает None, если LLM недоступна - вызывающий код в этом случае НЕ сохраняет статью.
+    """
+    text_excerpt = (body_text or "")[:4000]
+    prompt = (
+        _PC_CONTEXT +
+        "\nВот статья для оценки:\n"
+        f"Заголовок: {title or ''}\n"
+        f"Текст: {text_excerpt}\n\n"
+        "Вопрос: эта статья ДЕЙСТВИТЕЛЬНО о деятельности, истории, коллекциях, выставках, "
+        "мероприятиях или сотрудниках Президентского центра - то есть Центр является "
+        "ГЛАВНОЙ темой материала? Или Центр упомянут лишь мимоходом (например, как "
+        "адрес/место проведения чужого мероприятия, или в перечне учреждений УДП)?\n"
+        "Если статья не о Центре напрямую - is_about_pc должен быть false, даже если словосочетание "
+        "'Президентский центр' встречается в тексте.\n"
+        "Ответь одним решением с кратким обоснованием."
+    )
+
+    try:
+        llm = _get_llm().with_structured_output(TopicDecision)
+        return llm.invoke(prompt)
+    except Exception as e:
+        log.error("PC topic classification failed (is Ollama running at %s?): %s", settings.ollama_base_url, e)
+        return None

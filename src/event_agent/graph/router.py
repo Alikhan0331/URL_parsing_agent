@@ -10,13 +10,13 @@ def route_after_list_page(state: CrawlState):
     return [Send("extract_event", {"url": url}) for url in state["event_urls"]]
 
 
-def route_after_pagination(state: CrawlState):
-    """Решает: продолжать пагинацию или остановиться.
+def route_after_topic_classification(state: CrawlState):
+    """Условный edge: сохранять запись только если LLM подтвердила, что статья про ПЦ."""
+    return "keep_record" if state.get("topic_is_pc") else "discard_record"
 
-    Если max_pages задан (не None) - останавливаемся по достижению лимита.
-    Если max_pages is None - обход продолжается неограниченно, пока list_page
-    сам не выставит stop=True (пустая страница / нет карточек).
-    """
+
+def route_after_pagination(state: CrawlState):
+    """Решает: продолжать пагинацию или остановиться."""
     if state["max_pages"] is not None and state["current_page"] > state["max_pages"]:
         return END
     return "list_page"
