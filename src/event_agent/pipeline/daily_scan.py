@@ -1,8 +1,8 @@
 """Инкрементальный автономный обход одного сайта.
 
-ФИЛЬТРАЦИЯ ПО ТЕМЕ: статья сохраняется, ТОЛЬКО если она ДЕЙСТВИТЕЛЬНО посвящена
-Президентскому центру (ПЦ). Ключевые слова больше НЕ используются - вместо них
-каждая статья отправляется LLM (classify_topic_pc).
+ФИЛЬТРАЦИЯ ПО ТЕМЕ: статья сохраняется, если она РЕЛЕВАНТНА Президентскому центру (ПЦ) -
+включая случаи, когда ПЦ упомянут просто как локация мероприятия. Ключевые слова больше
+НЕ используются - вместо них каждая статья отправляется LLM (classify_topic_pc).
 
 Структурный фильтр кандидатов обязательно проверяется LLM (verify_candidates_with_llm)
 перед извлечением, если включён флаг LLM_VERIFY_STRUCTURAL.
@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 def scan_site_once(site: SiteConfig, conn: sqlite3.Connection) -> int:
     """Возвращает количество НОВЫХ сохранённых статей за этот запуск."""
     saved_count = 0
-    log.info("=== [%s] Начинаю обход (обязательная проверка на тему ПЦ) ===", site.name)
+    log.info("=== [%s] Начинаю обход (обязательная проверка на релевантность ПЦ) ===", site.name)
 
     for page_num in range(1, site.max_pages_per_run + 1):
         url = site.base_list_url.format(n=page_num)
@@ -79,18 +79,18 @@ def scan_site_once(site: SiteConfig, conn: sqlite3.Connection) -> int:
             topic_decision = classify_topic_pc(record.title, record.body_text)
             if topic_decision is None:
                 log.warning(
-                    "[%s] PC topic check unavailable (LLM down) - skipping to be safe: %s",
+                    "[%s] PC relevance check unavailable (LLM down) - skipping to be safe: %s",
                     site.name, link,
                 )
                 continue
 
-            if not topic_decision.is_about_pc:
-                log.info("[%s] Not saved (not about \u041f\u0426 - %s): %s", site.name, topic_decision.reason, link)
+            if not topic_decision.is_relevant_to_pc:
+                log.info("[%s] Not saved (not relevant to \u041f\u0426 - %s): %s", site.name, topic_decision.reason, link)
                 continue
 
             save_article(conn, site.name, record, [topic_decision.reason])
             saved_count += 1
-            log.info("[%s] SAVED (about \u041f\u0426 - %s): %s", site.name, topic_decision.reason, link)
+            log.info("[%s] SAVED (relevant to \u041f\u0426 - %s): %s", site.name, topic_decision.reason, link)
 
         if len(new_links) < len(links):
             log.info("[%s] Reached previously-seen content mid-page, stopping", site.name)
