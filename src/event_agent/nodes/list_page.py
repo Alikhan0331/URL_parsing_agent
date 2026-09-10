@@ -49,8 +49,8 @@ def list_page_node(state: CrawlState) -> dict:
             links = verified
         else:
             log.warning(
-                "LLM verification unavailable (Ollama unreachable?) - keeping structurally-matched "
-                "links unverified for this page"
+                "LLM verification unavailable (Ollama unreachable?) - keeping "
+                "structurally-matched links unverified for this page"
             )
 
     if not links and settings.use_llm_fallback:
@@ -80,6 +80,29 @@ def list_page_node(state: CrawlState) -> dict:
             state["current_page"],
         )
         return {"event_urls": [], "stop": True}
+
+    conn = state.get("conn")
+    if conn is not None:
+        from event_agent.storage.db import url_processed
+
+        candidate_links = links
+        links = [link for link in candidate_links if not url_processed(conn, link)]
+
+        if not links:
+            log.info(
+                "[%s] All %d links on page %d are already processed - stopping "
+                "(reached previously-processed content)",
+                state.get("site_name"), len(candidate_links), state["current_page"],
+            )
+            return {"event_urls": [], "previous_links": candidate_links, "stop": True}
+
+        if len(links) < len(candidate_links):
+            log.info(
+                "[%s] Reached previously-processed content mid-page %d - processing only the "
+                "%d new link(s), then stopping pagination",
+                state.get("site_name"), state["current_page"], len(links),
+            )
+            return {"event_urls": links, "previous_links": candidate_links, "stop": False, "last_page": True}
 
     log.info("Found %d event links on page %d", len(links), state["current_page"])
     return {"event_urls": links, "previous_links": links, "stop": False}

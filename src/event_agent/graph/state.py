@@ -1,5 +1,5 @@
 import operator
-from typing import Annotated, List, Optional, TypedDict
+from typing import Annotated, Any, List, Optional, TypedDict
 from pydantic import BaseModel, Field
 
 
@@ -16,13 +16,18 @@ class CrawlState(TypedDict):
     list_root_path: Optional[str]
     current_page: int
     max_pages: Optional[int]
+    last_page: bool
     event_urls: List[str]
     previous_links: List[str]
     current_record: Optional[EventRecord]
     topic_is_pc: Optional[bool]
     topic_reason: Optional[str]
+    topic_conclusive: bool
     all_records: Annotated[List[EventRecord], operator.add]
+    saved_count: Annotated[int, operator.add]
     stop: bool
+    conn: Optional[Any]
+    site_name: Optional[str]
 
 
 class EventTask(TypedDict):
