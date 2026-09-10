@@ -4,15 +4,19 @@ from event_agent.graph.state import CrawlState
 
 
 def route_after_list_page(state: CrawlState):
-    """Решает: fan-out по найденным карточкам, либо завершение обхода."""
+    """Решает: fan-out по найденным карточкам, либо завершение обхода.
+
+    conn/site_name прокидываются в каждую Send-задачу явно (см. EventTask) - общие
+    (не-Annotated) поля state нельзя писать параллельно из нескольких Send-веток.
+    """
     if state.get("stop") or not state.get("event_urls"):
         return END
-    return [Send("extract_event", {"url": url}) for url in state["event_urls"]]
-
-
-def route_after_topic_classification(state: CrawlState):
-    """Условный edge: сохранять запись только если LLM подтвердила, что статья релевантна ПЦ."""
-    return "keep_record" if state.get("topic_is_pc") else "discard_record"
+    conn = state.get("conn")
+    site_name = state.get("site_name")
+    return [
+        Send("extract_event", {"url": url, "conn": conn, "site_name": site_name})
+        for url in state["event_urls"]
+    ]
 
 
 def route_after_pagination(state: CrawlState):
